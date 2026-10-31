@@ -101,10 +101,10 @@ button:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
 .dexrow .rec { text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .dexrow .rec b { display: block; color: var(--ink); font-size: 15px; }
 .dexrow .pic { width: 96px; height: 48px; display: block; }
-.dexrow .pic svg { width: 96px; height: 48px; display: block; }
 .dexrow .pic img { width: 96px; height: 48px; object-fit: contain; display: block; }
 .dexrow.locked .nm, .dexrow.locked .no, .dexrow.locked .sub { opacity: .6; }
-@media (max-width: 380px) { .dexrow { grid-template-columns: 34px 72px 1fr auto; } .dexrow .pic, .dexrow .pic svg, .dexrow .pic img { width: 72px; height: 36px; } }
+.dexrow.locked .pic img { opacity: .55; }
+@media (max-width: 380px) { .dexrow { grid-template-columns: 34px 72px 1fr auto; } .dexrow .pic, .dexrow .pic img { width: 72px; height: 36px; } }
 .note { font-size: 13px; color: var(--muted); line-height: 1.4; margin: 10px 2px 0; }
 
 @media (prefers-reduced-motion: reduce) { .toast, .xpbar i { transition: none; } }
@@ -162,7 +162,7 @@ button:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
   <div class="sheet" role="dialog" aria-label="Fiskedex">
     <header><h2>Fiskedex</h2><button type="button" id="dexClose">Stäng</button></header>
     <div id="dexList"></div>
-    <p class="note">Version 3. Prototypen har en sjö med tre arter. De låsta arterna lever i hav och älvar och hittas bara där.</p>
+    <p class="note">Version 4. Prototypen har en sjö med tre arter. De låsta arterna lever i hav och älvar och hittas bara där.</p>
   </div>
 </div>
 
@@ -720,71 +720,16 @@ $('#release').addEventListener('click', () => finishCatch(true));
 $('#keep').addEventListener('click', () => finishCatch(false));
 
 // ---------- dex ----------
-// ---------- dex pictures: a 3D portrait once caught, a drawn silhouette until then ----------
-const SHAPES = {
-  abborre: { h: 13, snout: 2, fins: [[58, 80, 10, 1], [36, 54, 7, 0]], tail: 'fork', tw: 11 },
-  gos:     { h: 9, snout: 1, fins: [[62, 82, 9, 1], [36, 58, 6, 0]], tail: 'fork', tw: 10 },
-  gadda:   { h: 7, snout: 6, fins: [[30, 44, 7, 0]], tail: 'fork', tw: 9, anal: [30, 42] },
-  lax:     { h: 10, snout: 2, fins: [[56, 70, 9, 0], [34, 38, 3, 0]], tail: 'fork', tw: 11 },
-  torsk:   { h: 10, snout: 1, fins: [[70, 82, 8, 0], [52, 66, 7, 0], [34, 48, 6, 0]], tail: 'flat', tw: 9, barbel: true },
-  fenknot: { h: 9, snout: 0, head: 1.4, fins: [[64, 80, 8, 1], [38, 60, 6, 0]], tail: 'flat', tw: 9, fan: true },
-  marulk:  { h: 15, snout: 0, head: 1.6, fins: [[40, 52, 6, 0]], tail: 'round', tw: 9, lure: true },
-  haj:     { h: 11, snout: 4, fins: [[60, 74, 16, 0], [32, 36, 4, 0]], tail: 'shark', tw: 16 }
-};
-function silhouette(key, color) {
-  const s = SHAPES[key], c = 30, h = s.h, hh = h * (s.head || 1), sn = s.snout;
-  const top = x => c - (x > 70 ? hh : h) * Math.sin(Math.PI * clamp((x - 22) / 90, 0.08, 1)) ;
-  let d = `M${110 + sn} ${c + 1} Q${104} ${c - hh * 0.9} 82 ${c - hh} Q52 ${c - h * 1.05} 24 ${c - h * 0.32} L24 ${c + h * 0.32} Q52 ${c + h * 1.05} 82 ${c + hh} Q104 ${c + hh * 0.9} ${110 + sn} ${c + 1} Z`;
-  const tw = s.tw;
-  if (s.tail === 'fork') d += ` M26 ${c} L8 ${c - tw} L15 ${c} L8 ${c + tw} Z`;
-  if (s.tail === 'flat') d += ` M26 ${c} L10 ${c - tw} L10 ${c + tw} Z`;
-  if (s.tail === 'round') d += ` M26 ${c} Q8 ${c - tw * 1.4} 8 ${c} Q8 ${c + tw * 1.4} 26 ${c} Z`;
-  if (s.tail === 'shark') d += ` M28 ${c} L6 ${c - tw} L16 ${c} L12 ${c + tw * 0.6} Z`;
-  for (const [x0, x1, fh, spiky] of s.fins) {
-    const y0 = Math.min(top(x0), top(x1)) + 1.5;
-    if (spiky) { d += ` M${x0} ${y0 + 1}`; const n = 5; for (let i = 0; i <= n; i++) { const x = x1 - (x1 - x0) * i / n; d += ` L${x} ${y0 - fh * (i % 2 ? 0.55 : 1)}`; } d += ` L${x0} ${y0 + 1} Z`; }
-    else d += ` M${x1} ${y0 + 1} L${x0 + (x1 - x0) * 0.35} ${y0 - fh} L${x0} ${y0 + 1} Z`;
-  }
-  if (s.anal) d += ` M${s.anal[1]} ${c + h * 0.6} L${s.anal[0] + 3} ${c + h + 6} L${s.anal[0]} ${c + h * 0.6} Z`;
-  if (s.fan) d += ` M78 ${c + 2} Q66 ${c + 26} 52 ${c + 18} Q62 ${c + 12} 78 ${c + 2} Z`;
-  if (s.barbel) d += ` M104 ${c + 7} L101 ${c + 14} L103 ${c + 14} L106 ${c + 7} Z`;
-  let extra = '';
-  if (s.lure) extra = `<path d="M92 ${c - hh + 2} Q96 ${c - hh - 14} 106 ${c - hh - 12}" fill="none" stroke="${color}" stroke-width="2"/><circle cx="107" cy="${c - hh - 10}" r="3" fill="${color}"/>`;
-  return `<svg viewBox="0 0 124 60" aria-hidden="true"><path d="${d}" fill="${color}"/>${extra}<circle cx="${100 + sn * 0.5}" cy="${c - 3}" r="1.8" fill="#0e2a33"/></svg>`;
-}
-const thumbs = {};
-let thumbR = null;
-function makeThumb(sid) {
-  if (thumbs[sid]) return thumbs[sid];
-  if (!three) initThree();
-  thumbs[sid] = loadModel(sid).then(group => {
-    if (!thumbR) {
-      const canvas = document.createElement('canvas'); canvas.width = 288; canvas.height = 144;
-      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
-      renderer.outputEncoding = THREE.sRGBEncoding; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.15;
-      const scene = new THREE.Scene(); scene.add(new THREE.HemisphereLight(0xcfeee8, 0x1a2a20, 0.9));
-      const key = new THREE.DirectionalLight(0xfff1d6, 1.5); key.position.set(2, 4, 5); scene.add(key);
-      const camera = new THREE.OrthographicCamera(-1.3, 1.3, 0.65, -0.65, 0.1, 20); camera.position.set(0, 0.05, 6); camera.lookAt(0, 0.05, 0);
-      thumbR = { renderer, scene, camera, canvas };
-    }
-    const g = group.clone(); g.rotation.y = -0.12; thumbR.scene.add(g);
-    const keep = three.U.uTime.value; three.U.uTime.value = 0.4;
-    thumbR.renderer.render(thumbR.scene, thumbR.camera);
-    three.U.uTime.value = keep; thumbR.scene.remove(g);
-    return thumbR.canvas.toDataURL('image/png');
-  });
-  thumbs[sid].catch(() => { delete thumbs[sid]; });
-  return thumbs[sid];
-}
+// ---------- dex pictures: a colour portrait once caught, black and white until then (pre-rendered from the 3D models) ----------
+const pic = (key, caught, name) => `<img src="dex/${key}${caught ? '' : '-bw'}.png" alt="${caught ? name : 'Okänd art'}" loading="lazy">`;
 function renderDex() {
   const rows = ORDER.map(k => {
     const s = SPECIES[k], d = save.dex[k];
-    return `<div class="dexrow${d ? '' : ' locked'}"><div class="no">${s.dex}</div><div class="pic" id="pic-${k}">${silhouette(k, d ? '#5f8f8a' : 'rgba(185,207,208,0.28)')}</div><div><div class="nm">${d ? s.name : '???'}</div><div class="sub">${d ? s.latin + ' · ' + d.count + ' fångad' + (d.count > 1 ? 'e' : '') : 'Lever i den här sjön'}</div></div>` +
+    return `<div class="dexrow${d ? '' : ' locked'}"><div class="no">${s.dex}</div><div class="pic">${pic(k, !!d, s.name)}</div><div><div class="nm">${d ? s.name : '???'}</div><div class="sub">${d ? s.latin + ' · ' + d.count + ' fångad' + (d.count > 1 ? 'e' : '') : 'Lever i den här sjön'}</div></div>` +
       `<div class="rec">${d ? '<b>' + Math.round(d.best.L) + ' cm</b>' + (d.best.W < 1 ? Math.round(d.best.W * 1000) + ' g' : d.best.W.toFixed(1).replace('.', ',') + ' kg') : ''}</div></div>`;
   });
-  for (const [no, nm, where, shape] of LOCKED) rows.push(`<div class="dexrow locked"><div class="no">${no}</div><div class="pic">${silhouette(shape, 'rgba(185,207,208,0.28)')}</div><div><div class="nm">${nm}</div><div class="sub">${where}</div></div><div class="rec"></div></div>`);
+  for (const [no, nm, where, shape] of LOCKED) rows.push(`<div class="dexrow locked"><div class="no">${no}</div><div class="pic">${pic(shape, false, nm)}</div><div><div class="nm">${nm}</div><div class="sub">${where}</div></div><div class="rec"></div></div>`);
   $('#dexList').innerHTML = rows.join('');
-  for (const k of ORDER) if (save.dex[k]) makeThumb(k).then(url => { const el = document.getElementById('pic-' + k); if (el) el.innerHTML = `<img src="${url}" alt="${SPECIES[k].name}">`; }).catch(() => {});
 }
 $('#sensBtn').addEventListener('click', () => { if (!sensors.on) enableSensors(); else { sensors.compass = !sensors.compass; syncSens(); } });
 $('#dexBtn').addEventListener('click', () => { renderDex(); showLayer('dex'); });
