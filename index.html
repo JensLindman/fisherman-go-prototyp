@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Fisherman Go prototyp</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Nunito+Sans:wght@400;600;700;800&display=swap">
+<style>
+/* One committed look: an evening lake. Map fills the screen; HUD pinned top, actions pinned bottom; catch, reveal and dex are full-screen layers. */
+:root {
+  --deep: #0a1f27;
+  --panel: rgba(9, 28, 35, 0.84);
+  --ink: #f5efe4;
+  --muted: #b9cfd0;
+  --amber: #f2a33a;
+  --line: rgba(245, 239, 228, 0.16);
+  --good: #8fdc96;
+  --bad: #f07a6a;
+  --display: 'Fredoka', 'Trebuchet MS', Arial, sans-serif;
+  --body: 'Nunito Sans', 'Segoe UI', Arial, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; background: var(--deep); color: var(--ink); font-family: var(--body); overflow: hidden; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+canvas { display: block; touch-action: none; }
+#map { position: fixed; inset: 0; width: 100%; height: 100%; }
+button { font: inherit; color: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 12px 20px; font-weight: 800; font-size: 15px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); touch-action: manipulation; }
+button.primary { background: var(--amber); color: #1a1206; border-color: transparent; }
+button:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+.hud { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: max(12px, env(safe-area-inset-top)) 16px 0; pointer-events: none; z-index: 5; }
+.pill { white-space: nowrap; pointer-events: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; font-weight: 800; font-size: 14px; display: flex; align-items: center; gap: 10px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+#north { display: block; color: var(--amber); transition: none; }
+#sensBtn.on { border-color: var(--amber); }
+@media (max-width: 460px) { #sensTxt { display: none; } .xpbar { width: 44px; } .pill { padding: 8px 12px; } }
+.lvl { font-family: var(--display); font-weight: 600; font-size: 16px; }
+.xpbar { width: 72px; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
+.xpbar i { display: block; height: 100%; width: 0; background: var(--amber); transition: width .4s; }
+.bottom { position: fixed; left: 0; right: 0; bottom: 0; padding: 0 16px max(16px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none; z-index: 5; }
+.bottom > * { pointer-events: auto; }
+.hint { background: var(--panel); border: 1px solid var(--line); max-width: 420px; text-align: center; font-size: 15px; line-height: 1.4; padding: 10px 16px; border-radius: 14px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.toast { position: fixed; left: 50%; top: 72px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 16px; font-weight: 700; font-size: 15px; max-width: min(420px, calc(100% - 32px)); text-align: center; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 30; }
+.toast.on { opacity: 1; }
+
+.layer { position: fixed; inset: 0; display: none; z-index: 10; }
+.layer.on { display: block; }
+
+/* catch */
+#catchCv { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ctop { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: max(12px, env(safe-area-inset-top)) 16px 0; gap: 8px; }
+.status { position: absolute; left: 16px; right: 16px; top: 17%; text-align: center; pointer-events: none; }
+.status h2 { font-family: var(--display); font-weight: 600; font-size: clamp(26px, 7vw, 40px); margin: 0 0 6px; text-shadow: 0 2px 12px rgba(0,0,0,.45); text-wrap: balance; }
+.status p { margin: 0 auto; font-size: 16px; color: var(--muted); max-width: 380px; line-height: 1.4; text-shadow: 0 1px 8px rgba(0,0,0,.5); text-wrap: balance; }
+.status h2.alert { color: var(--amber); }
+.drillui { display: none; }
+.drilling .drillui { display: block; }
+.gauge { position: absolute; left: 18px; top: 30%; width: 26px; height: 38%; border-radius: 14px; background: rgba(0,0,0,.35); border: 1px solid var(--line); overflow: hidden; }
+.gauge::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 18%; background: rgba(240,122,106,.28); border-bottom: 2px dashed var(--bad); }
+.gauge::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 12%; background: rgba(185,207,208,.15); border-top: 2px dashed var(--muted); }
+.gauge i { position: absolute; left: 3px; right: 3px; bottom: 3px; border-radius: 10px; background: var(--good); height: 0; }
+.glabel { position: absolute; left: 10px; top: calc(30% - 26px); font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.meters { position: absolute; left: 56px; top: 30%; display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 800; color: var(--muted); }
+.meters b { display: block; font-family: var(--display); font-size: 22px; color: var(--ink); font-variant-numeric: tabular-nums; }
+#reel { position: absolute; right: 18px; bottom: max(24px, env(safe-area-inset-bottom)); width: 168px; height: 168px; border-radius: 50%; background: radial-gradient(circle at 50% 45%, #2b4a54, #12303a 70%); border: 2px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.4); touch-action: none; }
+#reel .hub { position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; background: #c9d6d6; }
+#reel .arm { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+#reel .arm i { position: absolute; left: -6px; top: -64px; width: 12px; height: 64px; border-radius: 6px; background: #c9d6d6; }
+#reel .arm b { position: absolute; left: -20px; top: -84px; width: 40px; height: 40px; border-radius: 50%; background: var(--amber); box-shadow: 0 2px 6px rgba(0,0,0,.4); }
+#reel .lab { position: absolute; left: 0; right: 0; bottom: -22px; text-align: center; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+#brake { position: absolute; left: 16px; bottom: max(28px, env(safe-area-inset-bottom)); padding: 16px 18px; font-size: 14px; line-height: 1.2; text-align: center; border-radius: 18px; touch-action: none; }
+#brake.held { background: var(--muted); color: #10262d; }
+.endrow { position: absolute; left: 0; right: 0; bottom: max(28px, env(safe-area-inset-bottom)); display: none; justify-content: center; gap: 10px; padding: 0 16px; flex-wrap: wrap; }
+.ended .endrow { display: flex; }
+
+/* reveal */
+#reveal { background: radial-gradient(ellipse at 50% 35%, #1d5462 0%, #0c2a33 60%, #071a20 100%); }
+#threeCv { position: absolute; left: 0; right: 0; top: 0; height: 58%; width: 100%; }
+.card { position: absolute; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(460px, calc(100% - 32px)); box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.card .eyebrow { font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--amber); }
+.card h2 { margin: 0; font-family: var(--display); font-weight: 600; font-size: 34px; line-height: 1.05; }
+.card .latin { font-style: italic; color: var(--muted); font-size: 15px; margin-top: 2px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { background: rgba(255,255,255,.05); border-radius: 12px; padding: 8px 10px; }
+.stat span { display: block; font-size: 12px; color: var(--muted); font-weight: 700; }
+.stat b { font-family: var(--display); font-weight: 600; font-size: 22px; font-variant-numeric: tabular-nums; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; }
+.badge { font-size: 12px; font-weight: 800; padding: 4px 10px; border-radius: 999px; background: rgba(242,163,58,.18); color: var(--amber); }
+.card .row { justify-content: stretch; }
+.card .row button { flex: 1; }
+.loading { position: absolute; left: 0; right: 0; top: 26%; text-align: center; color: var(--muted); font-weight: 700; }
+
+/* dex */
+#dex { background: rgba(5,16,20,.6); }
+.sheet { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); width: min(520px, 100%); max-height: 82%; overflow: auto; box-sizing: border-box; background: #0e2a33; border: 1px solid var(--line); border-bottom: none; border-radius: 22px 22px 0 0; padding: 18px 16px max(18px, env(safe-area-inset-bottom)); }
+.sheet header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.sheet h2 { margin: 0; font-family: var(--display); font-weight: 600; font-size: 28px; }
+.dexrow { display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center; padding: 12px; border-radius: 14px; background: rgba(255,255,255,.04); margin-bottom: 8px; }
+.dexrow .no { font-family: var(--display); font-weight: 600; color: var(--amber); font-size: 15px; font-variant-numeric: tabular-nums; }
+.dexrow .nm { font-weight: 800; font-size: 16px; }
+.dexrow .sub { font-size: 13px; color: var(--muted); }
+.dexrow .rec { text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dexrow .rec b { display: block; color: var(--ink); font-size: 15px; }
+.dexrow.locked { opacity: .5; }
+.note { font-size: 13px; color: var(--muted); line-height: 1.4; margin: 10px 2px 0; }
+
+@media (prefers-reduced-motion: reduce) { .toast, .xpbar i { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="map" aria-label="Karta med sjön, din position och fiskskuggor"></canvas>
+
+<div class="hud">
+  <div class="pill" aria-live="polite"><span class="lvl" id="lvl">Nivå 1</span><span class="xpbar" aria-hidden="true"><i id="xpfill"></i></span></div>
+  <button class="pill" id="sensBtn" type="button" aria-label="Kompass: vrid kartan med telefonen"><svg id="north" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 L13 14 L8 11 L3 14 Z" fill="currentColor"/></svg><span id="sensTxt">Kompass</span></button>
+  <button class="pill" id="dexBtn" type="button">Fiskedex <span id="dexCount">0/3</span></button>
+</div>
+<div class="bottom" id="mapBottom">
+  <div class="hint" id="hint">Tryck på kartan för att gå. Tryck på en skugga i vattnet när den är inom den orange ringen.</div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<!-- catch: aim, cast, wait for the bite, then the drill -->
+<div class="layer" id="catch">
+  <canvas id="catchCv" aria-label="Vattnet där du kastar och drillar"></canvas>
+  <div class="ctop">
+    <button type="button" id="giveUp">Tillbaka</button>
+    <div class="pill" id="fishLabel">Okänd fisk</div>
+  </div>
+  <div class="status" aria-live="polite"><h2 id="stTitle">Svep uppåt för att kasta</h2><p id="stText">Svepets fart avgör hur långt det går. Sikta på skuggan.</p></div>
+  <div class="drillui">
+    <div class="glabel">Spänning</div>
+    <div class="gauge" aria-hidden="true"><i id="gaugeFill"></i></div>
+    <div class="meters"><div>Lina ute<b id="mLine">0 m</b></div><div>Fiskens ork<b id="mStam">100 %</b></div></div>
+    <button type="button" id="brake">Håll in<br>för att<br>släppa lina</button>
+    <div id="reel" role="slider" aria-label="Veva rullen" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><div class="arm" id="arm"><i></i><b></b></div><div class="hub"></div><div class="lab">Veva runt</div></div>
+  </div>
+  <div class="endrow"><button type="button" id="retry" class="primary">Kasta igen</button><button type="button" id="toMap">Till kartan</button></div>
+</div>
+
+<!-- reveal of the catch -->
+<div class="layer" id="reveal">
+  <canvas id="threeCv" aria-label="Din fångst i 3D"></canvas>
+  <div class="loading" id="loading">Tar upp fisken …</div>
+  <div class="card">
+    <div><div class="eyebrow" id="rvEyebrow">Fiskedex</div><h2 id="rvName">Fisk</h2><div class="latin" id="rvLatin"></div></div>
+    <div class="stats">
+      <div class="stat"><span>Längd</span><b id="rvLen">0 cm</b></div>
+      <div class="stat"><span>Vikt</span><b id="rvW">0 kg</b></div>
+      <div class="stat"><span>Ditt rekord</span><b id="rvBest">–</b></div>
+    </div>
+    <div class="badges" id="rvBadges"></div>
+    <div class="row"><button type="button" class="primary" id="release">Släpp tillbaka +50 XP</button><button type="button" id="keep">Behåll</button></div>
+  </div>
+</div>
+
+<!-- fiskedex -->
+<div class="layer" id="dex">
+  <div class="sheet" role="dialog" aria-label="Fiskedex">
+    <header><h2>Fiskedex</h2><button type="button" id="dexClose">Stäng</button></header>
+    <div id="dexList"></div>
+    <p class="note">Prototypen har en sjö med tre arter. De låsta arterna lever i hav och älvar och hittas bara där.</p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+};
+const buzz = p => { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} };
+
+// ---------- species (weights are approximate length–weight relations, W = a·L^b, L in cm, W in g) ----------
+const SPECIES = {
+  abborre: { name: 'Abborre', latin: 'Perca fluviatilis', dex: '#001', file: 'fish/abborre.txt', p: 0.5, min: 14, max: 46, a: 0.011, b: 3.07, size: 0.75, strength: 0.42 },
+  gos:     { name: 'Gös', latin: 'Sander lucioperca', dex: '#009', file: 'fish/gos.txt', p: 0.2, min: 35, max: 92, a: 0.0065, b: 3.07, size: 1.05, strength: 0.66 },
+  gadda:   { name: 'Gädda', latin: 'Esox lucius', dex: '#014', file: 'fish/gadda.txt', p: 0.3, min: 40, max: 118, a: 0.0052, b: 3.04, size: 1.4, strength: 0.82 }
+};
+const ORDER = ['abborre', 'gos', 'gadda'];
+const LOCKED = [['#027', 'Lax', 'Älvar och hav'], ['#031', 'Torsk', 'Hav'], ['#058', 'Fenknot', 'Hav'], ['#120', 'Marulk', 'Hav'], ['#150', 'Vithaj', 'Hav']];
+const rollSpecies = () => { let r = Math.random(); for (const k of ORDER) { r -= SPECIES[k].p; if (r <= 0) return k; } return 'abborre'; };
+const rollFish = sid => {
+  const s = SPECIES[sid];
+  const L = s.min + (s.max - s.min) * Math.pow(Math.random(), 2.1);
+  const W = s.a * Math.pow(L, s.b) / 1000;
+  const Wmax = s.a * Math.pow(s.max, s.b) / 1000;
+  return { sid, L, W, strength: s.strength * (0.65 + 0.55 * W / Wmax) };
+};
+
+// ---------- save ----------
+let save = store.get('fg-proto', null) || { xp: 0, dex: {} };
+const level = xp => Math.floor(Math.sqrt(xp / 120)) + 1;
+const lvlXp = l => 120 * (l - 1) * (l - 1);
+function syncHud() {
+  const l = level(save.xp), a = lvlXp(l), b = lvlXp(l + 1);
+  $('#lvl').textContent = 'Nivå ' + l;
+  $('#xpfill').style.width = Math.round(100 * (save.xp - a) / (b - a)) + '%';
+  $('#dexCount').textContent = ORDER.filter(k => save.dex[k]).length + '/' + ORDER.length;
+}
+function addXp(n) { const before = level(save.xp); save.xp += n; store.set('fg-proto', save); syncHud(); if (level(save.xp) > before) toast('Ny nivå: ' + level(save.xp) + '!'); }
+let toastT = 0;
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2600); }
+
+// ---------- sensors: compass, motion and GPS (only where the browser allows them, e.g. a page of its own) ----------
+const sensors = { on: false, compass: true, heading: null, rot: 0, h0: null, motion: false, lastFix: null, gps: false, sw: null, cool: 0 };
+const angDiff = (a, b) => ((a - b + 540) % 360) - 180;
+function headingFrom(e) {
+  if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) return e.webkitCompassHeading;   // iOS
+  if (e.absolute && e.alpha != null) return (360 - e.alpha) % 360;                                                     // Android
+  return null;
+}
+function onOrient(e) { const h = headingFrom(e); if (h != null) sensors.heading = h; }
+function onMotion(e) {
+  const r = e.rotationRate; if (!r) return; sensors.motion = true;
+  if (layer !== 'catch' || C.phase !== 'aim') { sensors.sw = null; return; }
+  const now = performance.now(); if (now < sensors.cool) return;
+  const mag = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0);   // degrees per second
+  if (!sensors.sw) { if (mag > 240) sensors.sw = { t0: now, max: mag }; return; }
+  sensors.sw.max = Math.max(sensors.sw.max, mag);
+  if (now - sensors.sw.t0 > 320) {
+    const power = clamp((sensors.sw.max - 160) / 620, 0.12, 1.3); sensors.sw = null; sensors.cool = now + 1200;
+    doCast(aimX(), power);
+  }
+}
+function onFix(p) {
+  const c = p.coords; if (c.accuracy > 35) return;
+  if (!sensors.lastFix) { sensors.lastFix = { lat: c.latitude, lon: c.longitude }; sensors.gps = true; toast('GPS på: gå i verkligheten så går du på kartan.'); return; }
+  const dN = (c.latitude - sensors.lastFix.lat) * 111320, dE = (c.longitude - sensors.lastFix.lon) * 111320 * Math.cos(c.latitude * Math.PI / 180);
+  if (Math.hypot(dN, dE) < 2) return;
+  sensors.lastFix = { lat: c.latitude, lon: c.longitude };
+  const nx = player.x + dE, ny = player.y - dN; if (!blocked(nx, ny)) { player.x = nx; player.y = ny; player.tx = null; }
+}
+async function enableSensors() {
+  try { if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) { if (await DeviceOrientationEvent.requestPermission() !== 'granted') throw 0; } }
+  catch (e) { toast('Kompassen fick inte tillstånd.'); }
+  try { if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) await DeviceMotionEvent.requestPermission(); } catch (e) {}
+  if ('ondeviceorientationabsolute' in window) window.addEventListener('deviceorientationabsolute', onOrient);
+  window.addEventListener('deviceorientation', onOrient);
+  window.addEventListener('devicemotion', onMotion);
+  try { navigator.geolocation && navigator.geolocation.watchPosition(onFix, () => toast('Ingen GPS här. Du kan fortfarande gå genom att trycka på kartan.'), { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 }); } catch (e) {}
+  sensors.on = true; sensors.compass = true; syncSens();
+  setTimeout(() => { if (sensors.heading == null) toast('Ingen kompass i den här webbläsaren. Öppna sidan direkt i mobilen.'); }, 2500);
+}
+function syncSens() { $('#sensTxt').textContent = !sensors.on ? 'Kompass' : sensors.compass ? 'Kompass på' : 'Kompass av'; $('#sensBtn').classList.toggle('on', sensors.on && sensors.compass); }
+function updateSensors(dt) {
+  const target = sensors.on && sensors.compass && sensors.heading != null ? -sensors.heading * Math.PI / 180 : 0;
+  let d = target - sensors.rot; d = Math.atan2(Math.sin(d), Math.cos(d)); sensors.rot += d * Math.min(1, dt * 6);
+  if (sensors.on && sensors.heading != null && player.tx == null) player.h = Math.atan2(-Math.cos(sensors.heading * Math.PI / 180), Math.sin(sensors.heading * Math.PI / 180));
+}
+const aimX = () => sensors.heading != null && sensors.h0 != null ? clamp(angDiff(sensors.heading, sensors.h0) / 35, -0.95, 0.95) : 0;
+
+// ---------- canvases ----------
+const map = $('#map'), mx = map.getContext('2d');
+const cc = $('#catchCv'), cx = cc.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1); W = window.innerWidth; H = window.innerHeight;
+  for (const c of [map, cc]) { c.width = Math.round(W * DPR); c.height = Math.round(H * DPR); }
+  if (three) three.resize();
+}
+window.addEventListener('resize', resize);
+
+// ---------- world (metres, y grows south) ----------
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const Rl = a => 112 + 18 * Math.sin(3 * a + 1) + 10 * Math.sin(5 * a + 2) + 6 * Math.sin(7 * a + 0.5);
+const PIER = { a: Math.PI / 2, len: 36, w: 5 };
+function onPier(x, y) {
+  const ux = Math.cos(PIER.a), uy = Math.sin(PIER.a), s = x * ux + y * uy, t = -x * uy + y * ux, r = Rl(PIER.a);
+  return s <= r + 3 && s >= r - PIER.len && Math.abs(t) <= PIER.w / 2;
+}
+const isWater = (x, y) => Math.hypot(x, y) < Rl(Math.atan2(y, x));
+const blocked = (x, y) => isWater(x, y) && !onPier(x, y);
+const CAST = 70;
+const player = { x: 0, y: Rl(Math.PI / 2) + 22, h: -Math.PI / 2, tx: null, ty: null };
+
+const scen = (() => {
+  const r = rng(7), trees = [], reeds = [], tufts = [], rocks = [];
+  while (trees.length < 90) {
+    const a = r() * Math.PI * 2, d = Rl(a) + 28 + r() * 230, x = Math.cos(a) * d, y = Math.sin(a) * d;
+    if (Math.abs(x) < 14 && y > 120) continue;                     // keep the path to the pier open
+    trees.push({ x, y, r: 4 + r() * 5, s: r() });
+  }
+  for (let i = 0; i < 46; i++) { const a = r() * Math.PI * 2; if (Math.abs(a - PIER.a) < 0.25) continue; const d = Rl(a) - 2 - r() * 5; reeds.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, n: 4 + Math.floor(r() * 5), s: r() }); }
+  for (let i = 0; i < 260; i++) { const a = r() * Math.PI * 2, d = Rl(a) + 8 + r() * 300; tufts.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, s: r() }); }
+  for (let i = 0; i < 14; i++) { const a = r() * Math.PI * 2, d = Rl(a) + 4 + r() * 6; rocks.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, r: 1.5 + r() * 2.5 }); }
+  return { trees, reeds, tufts, rocks };
+})();
+
+let shadows = [];
+function spawnShadow() {
+  for (let k = 0; k < 50; k++) {
+    const a = Math.random() * Math.PI * 2, d = Math.random() * Rl(a) * 0.82, x = Math.cos(a) * d, y = Math.sin(a) * d;
+    if (onPier(x, y) || Math.hypot(x - player.x, y - player.y) < 30) continue;
+    const sid = rollSpecies();
+    return { x, y, h: Math.random() * 6.28, sp: 1 + Math.random() * 1.5, sid, ph: Math.random() * 10, born: perfNow() };
+  }
+  return null;
+}
+const perfNow = () => performance.now() / 1000;
+function fillShadows() { while (shadows.length < 5) { const s = spawnShadow(); if (!s) break; shadows.push(s); } }
+// one shadow starts in reach so the first catch is quick
+(function firstShadow() { const a = PIER.a, d = Rl(a) - 26; shadows.push({ x: Math.cos(a) * d + 10, y: Math.sin(a) * d, h: 0.3, sp: 0.8, sid: 'abborre', ph: 1, born: 0 }); fillShadows(); })();
+
+// ---------- map loop ----------
+const scale = () => Math.min(W, H) / 150;
+function updateMap(dt) {
+  if (player.tx != null) {
+    const dx = player.tx - player.x, dy = player.ty - player.y, d = Math.hypot(dx, dy);
+    if (d < 0.5) player.tx = null;
+    else {
+      const st = Math.min(d, 11 * dt), nx = player.x + dx / d * st, ny = player.y + dy / d * st;
+      player.h = Math.atan2(dy, dx);
+      if (blocked(nx, ny)) { player.tx = null; }
+      else { player.x = nx; player.y = ny; }
+    }
+  }
+  for (const s of shadows) {
+    s.h += (Math.random() - 0.5) * dt * 1.2;
+    const nx = s.x + Math.cos(s.h) * s.sp * dt, ny = s.y + Math.sin(s.h) * s.sp * dt;
+    const d = Math.hypot(nx, ny);
+    if (d > Rl(Math.atan2(ny, nx)) - 9 || onPier(nx, ny)) s.h += Math.PI * (0.6 + Math.random() * 0.5);
+    else { s.x = nx; s.y = ny; }
+  }
+}
+
+function lakePath(ctx, wx, wy, off) {
+  ctx.beginPath();
+  for (let i = 0; i <= 200; i++) { const a = i / 200 * Math.PI * 2, r = Rl(a) + off; const x = Math.cos(a) * r, y = Math.sin(a) * r; i ? ctx.lineTo(wx(x), wy(y)) : ctx.moveTo(wx(x), wy(y)); }
+  ctx.closePath();
+}
+function drawMap(t) {
+  const c = mx, s = scale(), ox = W / 2, oy = H * 0.6;
+  const wx = x => ox + (x - player.x) * s, wy = y => oy + (y - player.y) * s;
+  c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  // land
+  const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#3f6a3b'); g.addColorStop(1, '#4d7a43');
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+  c.translate(ox, oy); c.rotate(sensors.rot); c.translate(-ox, -oy);   // the way the phone faces is up
+  const far = Math.hypot(W, H) * 0.7, off = (X, Y, m) => Math.abs(X - ox) > far + m || Math.abs(Y - oy) > far + m;
+  c.fillStyle = 'rgba(30,60,30,0.35)';
+  for (const u of scen.tufts) { const X = wx(u.x), Y = wy(u.y); if (off(X, Y, 40)) continue; c.beginPath(); c.ellipse(X, Y, (3 + u.s * 6) * s, (2 + u.s * 3) * s, u.s * 3, 0, 7); c.fill(); }
+  // path to the pier
+  c.strokeStyle = '#b89c6a'; c.lineWidth = 4 * s; c.lineCap = 'round'; c.beginPath();
+  c.moveTo(wx(0), wy(Rl(PIER.a) + 220)); c.bezierCurveTo(wx(-10), wy(Rl(PIER.a) + 120), wx(8), wy(Rl(PIER.a) + 50), wx(0), wy(Rl(PIER.a))); c.stroke();
+  // shore + water
+  lakePath(c, wx, wy, 7); c.fillStyle = '#c8b27c'; c.fill();
+  lakePath(c, wx, wy, 0);
+  const wg = c.createRadialGradient(wx(0), wy(0), 10 * s, wx(0), wy(0), 140 * s); wg.addColorStop(0, '#0f4552'); wg.addColorStop(0.75, '#1f6b77'); wg.addColorStop(1, '#3a8e92');
+  c.fillStyle = wg; c.fill();
+  c.save(); lakePath(c, wx, wy, 0); c.clip();
+  c.strokeStyle = 'rgba(220,240,235,0.10)'; c.lineWidth = 1.5;
+  for (let i = -14; i < 14; i++) { const y0 = i * 16 + ((t * 2) % 16); c.beginPath(); for (let x = -160; x <= 160; x += 8) { const yy = y0 + Math.sin(x * 0.08 + t + i) * 1.6; x === -160 ? c.moveTo(wx(x), wy(yy)) : c.lineTo(wx(x), wy(yy)); } c.stroke(); }
+  c.restore();
+  // rocks, reeds
+  c.fillStyle = '#7d8380'; for (const k of scen.rocks) { c.beginPath(); c.arc(wx(k.x), wy(k.y), k.r * s, 0, 7); c.fill(); }
+  c.strokeStyle = '#6f8f3a'; c.lineWidth = Math.max(1, 0.5 * s);
+  for (const k of scen.reeds) for (let j = 0; j < k.n; j++) { const X = wx(k.x + (j - k.n / 2) * 0.9), Y = wy(k.y), sw = Math.sin(t * 1.5 + j + k.s * 9) * 0.8 * s; c.beginPath(); c.moveTo(X, Y); c.quadraticCurveTo(X + sw, Y - 3 * s, X + sw * 1.6, Y - 5.5 * s); c.stroke(); }
+  // pier
+  c.save(); c.translate(wx(Math.cos(PIER.a) * Rl(PIER.a)), wy(Math.sin(PIER.a) * Rl(PIER.a))); c.rotate(PIER.a + Math.PI / 2);
+  c.fillStyle = '#8a6942'; c.fillRect(-PIER.w / 2 * s, -3 * s, PIER.w * s, (PIER.len + 3) * s);
+  c.strokeStyle = 'rgba(40,25,10,0.45)'; c.lineWidth = 1; for (let k = 0; k < PIER.len; k += 1.6) { c.beginPath(); c.moveTo(-PIER.w / 2 * s, k * s); c.lineTo(PIER.w / 2 * s, k * s); c.stroke(); }
+  c.restore();
+  // fish shadows
+  for (const f of shadows) {
+    const X = wx(f.x), Y = wy(f.y); if (off(X, Y, 60)) continue;
+    const sz = SPECIES[f.sid].size, inR = Math.hypot(f.x - player.x, f.y - player.y) <= CAST;
+    const rp = ((t * 0.5 + f.ph) % 1);
+    c.strokeStyle = `rgba(230,245,240,${0.35 * (1 - rp)})`; c.lineWidth = 1.5; c.beginPath(); c.ellipse(X, Y, (5 + rp * 9) * sz * s, (3 + rp * 6) * sz * s, 0, 0, 7); c.stroke();
+    if (inR) { c.strokeStyle = 'rgba(242,163,58,0.85)'; c.lineWidth = 2; c.beginPath(); c.arc(X, Y, 8 * sz * s, 0, 7); c.stroke(); }
+    c.save(); c.translate(X, Y); c.rotate(f.h); const wig = Math.sin(t * 6 + f.ph) * 0.25;
+    c.fillStyle = 'rgba(4,18,22,0.62)'; c.beginPath(); c.ellipse(0, 0, 4.2 * sz * s, 1.3 * sz * s, 0, 0, 7); c.fill();
+    c.beginPath(); c.moveTo(-3.6 * sz * s, 0); c.lineTo(-6 * sz * s, (-1.3 + wig) * sz * s); c.lineTo(-6 * sz * s, (1.3 + wig) * sz * s); c.closePath(); c.fill();
+    c.restore();
+  }
+  // trees (over everything near the ground)
+  for (const k of scen.trees) {
+    const X = wx(k.x), Y = wy(k.y), r = k.r * s; if (off(X, Y, r + 20)) continue;
+    c.fillStyle = 'rgba(10,30,15,0.35)'; c.beginPath(); c.ellipse(X + r * 0.4, Y + r * 0.5, r, r * 0.7, 0, 0, 7); c.fill();
+    c.fillStyle = k.s < 0.5 ? '#25502c' : '#2f5f30'; c.beginPath(); c.arc(X, Y, r, 0, 7); c.fill();
+    c.fillStyle = 'rgba(160,200,120,0.18)'; c.beginPath(); c.arc(X - r * 0.3, Y - r * 0.3, r * 0.5, 0, 7); c.fill();
+  }
+  // cast range + walk target + player
+  c.setLineDash([6, 6]); c.strokeStyle = 'rgba(242,163,58,0.55)'; c.lineWidth = 2; c.beginPath(); c.arc(ox, oy, CAST * s, 0, 7); c.stroke(); c.setLineDash([]);
+  if (player.tx != null) { c.strokeStyle = 'rgba(245,239,228,0.8)'; c.lineWidth = 2; c.beginPath(); c.arc(wx(player.tx), wy(player.ty), 6 + Math.sin(t * 6) * 2, 0, 7); c.stroke(); }
+  c.fillStyle = 'rgba(0,0,0,0.3)'; c.beginPath(); c.ellipse(ox + 2, oy + 4, 14, 8, 0, 0, 7); c.fill();
+  c.save(); c.translate(ox, oy); c.rotate(player.h);
+  c.fillStyle = 'rgba(242,163,58,0.35)'; c.beginPath(); c.moveTo(10, 0); c.lineTo(32, -10); c.lineTo(32, 10); c.closePath(); c.fill(); c.restore();
+  c.fillStyle = '#f2a33a'; c.strokeStyle = '#f5efe4'; c.lineWidth = 3; c.beginPath(); c.arc(ox, oy, 11, 0, 7); c.fill(); c.stroke();
+  $('#north').style.transform = `rotate(${sensors.rot}rad)`;
+}
+
+// ---------- map input ----------
+let down = null;
+map.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; });
+map.addEventListener('pointerup', e => {
+  if (!down) return; const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y); down = null; if (moved > 12) return;
+  const s = scale(), dx0 = e.clientX - W / 2, dy0 = e.clientY - H * 0.6, cr = Math.cos(-sensors.rot), sr = Math.sin(-sensors.rot);
+  const wxp = player.x + (dx0 * cr - dy0 * sr) / s, wyp = player.y + (dx0 * sr + dy0 * cr) / s;
+  let best = null, bd = 1e9;
+  for (const f of shadows) { const d = Math.hypot(f.x - wxp, f.y - wyp); const hit = Math.max(26 / s, SPECIES[f.sid].size * 8); if (d < hit && d < bd) { bd = d; best = f; } }
+  if (best) {
+    const d = Math.hypot(best.x - player.x, best.y - player.y);
+    if (d <= CAST) { startCatch(best, d); return; }
+    toast(`Skuggan är ${Math.round(d)} m bort. Du når ${CAST} m – gå närmare.`);
+  }
+  player.tx = wxp; player.ty = wyp;
+  hint('Bryggan tar dig längre ut. Skuggor inom den orange ringen kan du kasta mot.');
+});
+function hint(t) { $('#hint').textContent = t; }
+
+// ---------- catch ----------
+const C = { phase: 'off', shadow: null, fish: null, f: { X: 0, Z: 0.5, tX: 0, tZ: 0.5 }, bob: null, fly: null, timer: 0, spooks: 0, casts: 0, msgUntil: 0,
+  D: 0, T: 0, S: 1, run: 0, runT: 0, over: 0, slack: 0, reel: 0, reelAcc: 0, brake: false, fx: 0, ang: 0 };
+const P = (X, Z) => { const hy = H * 0.3, p = 1 / (1 + 2.6 * Z); return { x: W / 2 + X * W * 0.5 * p, y: hy + (H * 0.97 - hy) * p, p }; };
+const ROD = () => ({ x: W * 0.64, y: H * 0.8 });
+function setStatus(t, p, alert) { $('#stTitle').textContent = t; $('#stText').textContent = p || ''; $('#stTitle').classList.toggle('alert', !!alert); }
+function startCatch(sh, d) {
+  C.shadow = sh; C.fish = rollFish(sh.sid); C.spooks = 0; C.casts = 0; sensors.h0 = sensors.heading;
+  C.f = { X: clamp((Math.random() - 0.5) * 0.8, -0.45, 0.45), Z: clamp(d / CAST * 0.85, 0.22, 0.88) }; C.f.tX = C.f.X; C.f.tZ = C.f.Z;
+  $('#fishLabel').textContent = `Okänd fisk · ${Math.round(d)} m bort`;
+  showLayer('catch'); toAim();
+}
+function toAim() {
+  C.phase = 'aim'; C.bob = null; C.fly = null; setEnded(false); setDrill(false);
+  if (sensors.motion) setStatus(C.casts ? 'Kasta igen' : 'Sikta och kasta', 'Vrid dig mot skuggan och kasta med en snabb sving framåt. Du kan också svepa uppåt.');
+  else setStatus(C.casts ? 'Kasta igen' : 'Svep uppåt för att kasta', 'Svepets fart avgör hur långt det går. Sikta på skuggan.');
+}
+function setDrill(on) { $('#catch').classList.toggle('drilling', on); }
+function setEnded(on, retry) { $('#catch').classList.toggle('ended', on); $('#retry').style.display = retry ? '' : 'none'; }
+function endCatch(title, text, canRetry) { C.phase = 'end'; setDrill(false); setEnded(true, canRetry); setStatus(title, text, true); }
+
+// cast gesture
+let swipe = null;
+cc.addEventListener('pointerdown', e => {
+  if (C.phase === 'aim') { swipe = { pts: [{ x: e.clientX, y: e.clientY, t: performance.now() }] }; cc.setPointerCapture(e.pointerId); return; }
+  if (C.phase === 'approach' || C.phase === 'wait') { spook('Du ryckte för tidigt', 'Fisken blev skrämd och simmade undan en bit.'); return; }
+  if (C.phase === 'bite') hook();
+});
+cc.addEventListener('pointermove', e => { if (swipe) { swipe.pts.push({ x: e.clientX, y: e.clientY, t: performance.now() }); if (swipe.pts.length > 30) swipe.pts.shift(); } });
+cc.addEventListener('pointerup', e => {
+  if (!swipe) return; const pts = swipe.pts; swipe = null; const last = pts[pts.length - 1];
+  let first = pts[0]; for (const p of pts) if (last.t - p.t <= 90) { first = p; break; }
+  const dt = Math.max(16, last.t - first.t), vx = (last.x - first.x) / dt, vy = (last.y - first.y) / dt;
+  if (vy > -0.25) { setStatus('Svep uppåt', 'Dra fingret snabbt uppåt mot skuggan och släpp.'); return; }
+  const speed = Math.hypot(vx, vy) * 400 / Math.max(320, Math.min(W, H) * 0.9);   // same feel on small and large screens
+  const power = clamp(speed / 2.3, 0, 1.3);
+  if (power < 0.12) { setStatus('För svagt', 'Svep fortare för att få ut draget.'); return; }
+  doCast(clamp(vx / -vy * 0.75 + aimX(), -0.95, 0.95), power);
+});
+function doCast(X, Z) {
+  if (C.phase !== 'aim') return;
+  C.casts++; C.fly = { t0: perfNow(), dur: 0.55 + Z * 0.45, X, Z }; C.phase = 'flying'; setStatus('', '');
+  buzz(15);
+}
+function landed() {
+  const { X, Z } = C.fly; C.fly = null; C.bob = { X, Z, dip: 0 };
+  if (Z > 1.02) { C.phase = 'snag'; C.timer = 1.6; setStatus('För långt!', 'Draget fastnade i vassen på andra sidan. Veva in och försök igen.'); return; }
+  const d = Math.hypot(X - C.f.X, (Z - C.f.Z) * 1.4);
+  if (d < 0.17 || (d < 0.32 && Math.random() < 0.45)) {
+    C.phase = 'approach'; C.f.tX = X; C.f.tZ = Z + 0.02; C.timer = 1.2 + d * 4;
+    setStatus('Vänta …', 'Skuggan vänder mot draget. Rör inget förrän det nappar.');
+  } else { C.phase = 'miss'; C.timer = 1.8; setStatus(d < 0.32 ? 'Ingen reaktion' : 'Långt ifrån', d < 0.32 ? 'Fisken var inte sugen. Kasta igen, närmare.' : 'Draget landade för långt från skuggan.'); }
+}
+function spook(t, p) {
+  C.spooks++; C.bob = null;
+  if (C.spooks >= 3) { C.shadow && removeShadow(C.shadow); endCatch('Fisken simmade iväg', 'Den blev för skrämd. Leta upp en ny skugga på kartan.', false); return; }
+  C.f.tX = clamp(C.f.X + (Math.random() < 0.5 ? -0.3 : 0.3), -0.6, 0.6); C.f.tZ = clamp(C.f.Z + 0.12, 0.2, 0.92);
+  C.phase = 'aim'; setStatus(t, p + ' Kasta igen.', true);
+}
+function hook() {
+  C.phase = 'drill'; buzz([30, 40, 60]);
+  C.D = C.bob.Z; C.T = 0.35; C.S = 1; C.run = 1; C.runT = 1.5; C.over = 0; C.slack = 0; C.reel = 0; C.reelAcc = 0; C.fx = C.bob.X;
+  setDrill(true); setStatus('Fisken sitter!', 'Veva runt rullen. Håll spänningen i det gröna.', true);
+}
+function removeShadow(sh) { shadows = shadows.filter(s => s !== sh); }
+
+// reel + brake
+const reel = $('#reel'), arm = $('#arm'); let reelP = null;
+function reelAngle(e) { const r = reel.getBoundingClientRect(); return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)); }
+reel.addEventListener('pointerdown', e => { e.stopPropagation(); reel.setPointerCapture(e.pointerId); reelP = reelAngle(e); });
+reel.addEventListener('pointermove', e => {
+  if (reelP == null) return; const a = reelAngle(e); let d = a - reelP; if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI;
+  reelP = a; C.reelAcc += Math.abs(d); C.ang += Math.abs(d);
+});
+const stopReel = () => { reelP = null; };
+reel.addEventListener('pointerup', stopReel); reel.addEventListener('pointercancel', stopReel);
+let keyReel = false;
+window.addEventListener('keydown', e => { if (e.code === 'Space' && C.phase === 'drill') { keyReel = true; e.preventDefault(); } if (e.code === 'KeyB') setBrake(true); });
+window.addEventListener('keyup', e => { if (e.code === 'Space') keyReel = false; if (e.code === 'KeyB') setBrake(false); });
+const brake = $('#brake');
+function setBrake(on) { C.brake = on; brake.classList.toggle('held', on); }
+brake.addEventListener('pointerdown', e => { e.stopPropagation(); brake.setPointerCapture(e.pointerId); setBrake(true); });
+brake.addEventListener('pointerup', () => setBrake(false)); brake.addEventListener('pointercancel', () => setBrake(false));
+
+function updateCatch(dt) {
+  const t = perfNow();
+  C.f.X = lerp(C.f.X, C.f.tX, Math.min(1, dt * (C.phase === 'approach' ? 1.4 : 0.8)));
+  C.f.Z = lerp(C.f.Z, C.f.tZ, Math.min(1, dt * (C.phase === 'approach' ? 1.4 : 0.8)));
+  if (C.phase === 'aim' && Math.random() < dt * 0.4) { C.f.tX = clamp(C.f.X + (Math.random() - 0.5) * 0.25, -0.6, 0.6); C.f.tZ = clamp(C.f.Z + (Math.random() - 0.5) * 0.1, 0.2, 0.92); }
+  if (C.phase === 'flying' && t - C.fly.t0 >= C.fly.dur) landed();
+  if (C.phase === 'snag' || C.phase === 'miss') { C.timer -= dt; if (C.timer <= 0) toAim(); }
+  if (C.phase === 'approach') { C.timer -= dt; if (C.timer <= 0) { C.phase = 'wait'; C.timer = 0.5 + Math.random() * 1.8; } }
+  if (C.phase === 'wait') { C.timer -= dt; C.bob.dip = Math.sin(t * 9) * 0.15 * Math.random(); if (C.timer <= 0) { C.phase = 'bite'; C.timer = 0.75; buzz([60, 30, 60]); setStatus('NAPP! Tryck nu!', 'Tryck var som helst för att mothugga.', true); } }
+  if (C.phase === 'bite') { C.timer -= dt; C.bob.dip = 1; if (C.timer <= 0) spook('Fisken släppte betet', 'Du var för sen med mothugget.'); }
+  if (C.phase === 'drill') drill(dt);
+}
+function drill(dt) {
+  const f = C.fish;
+  // reel speed in turns per second, smoothed
+  const turns = C.reelAcc / (2 * Math.PI) / Math.max(dt, 1e-3); C.reelAcc = 0;
+  C.reel = lerp(C.reel, keyReel ? 1.2 : turns, Math.min(1, dt * 6));
+  const reelN = clamp(C.reel / 2.4, 0, 1.2);
+  // the fish alternates between runs and rests; it tires over time, faster under tension
+  C.runT -= dt; if (C.runT <= 0) { C.run = C.run > 0.5 ? 0.25 : 1; C.runT = C.run > 0.5 ? 1.2 + Math.random() * 1.8 : 1.4 + Math.random() * 2.2; if (C.run > 0.5) buzz(40); }
+  const pull = f.strength * (0.3 + 0.7 * C.S) * C.run;
+  const target = clamp(pull * 0.8 + reelN * 0.45 - (C.brake ? 0.55 : 0) + 0.05, 0, 1.35);
+  C.T = lerp(C.T, target, Math.min(1, dt * 3.5));
+  C.S = clamp(C.S - dt * (0.018 + C.T * 0.06) * (1.25 - f.strength * 0.7), 0, 1);   // big fish tire slower
+  if (reelN > 0.05 && !C.brake) C.D -= reelN * dt * 0.13 * (1 - pull * 0.5) * (1.1 - f.strength * 0.35);
+  if (C.brake || reelN < 0.05) C.D += pull * dt * (C.brake ? 0.09 : 0.04);
+  C.fx = clamp(C.fx + Math.sin(perfNow() * (0.8 + C.run)) * dt * 0.35 * C.run, -0.8, 0.8);
+  C.over = C.T >= 1 ? C.over + dt : 0;
+  C.slack = C.T < 0.1 ? C.slack + dt : Math.max(0, C.slack - dt);
+  // gauge and meters
+  const gf = $('#gaugeFill'); gf.style.height = clamp(C.T / 1.2, 0, 1) * 100 + '%';
+  gf.style.background = C.T >= 0.85 ? 'var(--bad)' : C.T < 0.12 ? 'var(--muted)' : 'var(--good)';
+  $('#mLine').textContent = Math.max(0, Math.round(C.D * CAST)) + ' m';
+  $('#mStam').textContent = Math.round(C.S * 100) + ' %';
+  reel.setAttribute('aria-valuenow', Math.round(reelN * 70));
+  arm.style.transform = `rotate(${C.ang}rad)`;
+  if (C.T >= 0.85 && C.phase === 'drill') setStatus('Akta linan!', 'Spänningen är för hög. Sluta veva eller håll in bromsen.', true);
+  else if (C.T < 0.12 && C.slack > 0.8) setStatus('Linan slaknar', 'Veva in, annars kan fisken slita sig.', true);
+  else if (C.run > 0.5) setStatus('Fisken rusar!', 'Låt den ta lina, veva försiktigt.');
+  else setStatus('Veva in nu', 'Fisken vilar. Ta in lina medan du kan.');
+  if (C.over > 0.8) { buzz(200); removeShadow(C.shadow); endCatch('Linan gick av!', 'För hård spänning. Fisken är borta, leta upp en ny skugga.', false); return; }
+  if (C.slack > 2.6) { removeShadow(C.shadow); endCatch('Fisken slet sig', 'Linan var för slak för länge.', false); return; }
+  if (C.D > 1.15) { removeShadow(C.shadow); endCatch('Slut på lina', 'Fisken drog ut all lina och kom loss.', false); return; }
+  if (C.D <= 0.03) { C.phase = 'landed'; buzz([40, 40, 40, 40, 120]); removeShadow(C.shadow); setDrill(false); landFish(); }
+}
+
+function drawCatch(t) {
+  const c = cx; c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const hy = H * 0.3;
+  const sky = c.createLinearGradient(0, 0, 0, hy); sky.addColorStop(0, '#1b3d4c'); sky.addColorStop(1, '#e3a463'); c.fillStyle = sky; c.fillRect(0, 0, W, hy);
+  // far bank
+  c.fillStyle = '#16302a'; c.beginPath(); c.moveTo(0, hy);
+  for (let x = 0; x <= W; x += 10) { const h = 18 + 14 * Math.sin(x * 0.013) + 9 * Math.sin(x * 0.041 + 1) + 6 * Math.sin(x * 0.11); c.lineTo(x, hy - h); }
+  c.lineTo(W, hy); c.closePath(); c.fill();
+  const wg = c.createLinearGradient(0, hy, 0, H); wg.addColorStop(0, '#5e8a86'); wg.addColorStop(0.15, '#2f6b72'); wg.addColorStop(1, '#0d3540'); c.fillStyle = wg; c.fillRect(0, hy, W, H - hy);
+  // waves
+  c.strokeStyle = 'rgba(230,245,240,0.12)'; c.lineWidth = 1.2;
+  for (let i = 0; i < 26; i++) { const Z = 1 - i / 26, p = P(0, Z); c.beginPath(); for (let x = -0.2; x <= 1.2; x += 0.04) { const xx = x * W, yy = p.y + Math.sin(x * 20 + t * 1.3 + i) * 2 * p.p; x === -0.2 ? c.moveTo(xx, yy) : c.lineTo(xx, yy); } c.stroke(); }
+  // sun glitter
+  c.fillStyle = 'rgba(255,214,160,0.25)'; for (let i = 0; i < 30; i++) { const Z = 0.55 + (i % 10) / 22, X = Math.sin(i * 12.9 + t * 0.6) * 0.25, p = P(X, Z); c.fillRect(p.x, p.y, 10 * p.p, 1.5); }
+
+  const rod = ROD();
+  let lineEnd = null, tension = 0.3;
+  // fish shadow before the hook
+  if (C.phase !== 'drill' && C.phase !== 'landed' && C.phase !== 'end') {
+    const p = P(C.f.X, C.f.Z), sz = SPECIES[C.fish.sid].size * 70 * p.p;
+    c.save(); c.translate(p.x, p.y); c.scale(1, 0.38);
+    const ang = Math.atan2(C.f.tZ - C.f.Z, C.f.tX - C.f.X) || 0;
+    c.rotate(Math.sin(t * 0.7) * 0.6 + ang * 0.2);
+    c.fillStyle = 'rgba(3,16,20,0.55)'; c.beginPath(); c.ellipse(0, 0, sz, sz * 0.3, 0, 0, 7); c.fill();
+    c.beginPath(); c.moveTo(-sz * 0.85, 0); c.lineTo(-sz * 1.35, -sz * 0.3 + Math.sin(t * 7) * sz * 0.08); c.lineTo(-sz * 1.35, sz * 0.3 + Math.sin(t * 7) * sz * 0.08); c.closePath(); c.fill();
+    c.restore();
+  }
+  // lure in flight
+  if (C.phase === 'flying') {
+    const k = clamp((perfNow() - C.fly.t0) / C.fly.dur, 0, 1), end = P(C.fly.X, Math.min(C.fly.Z, 1.05));
+    const x = lerp(rod.x, end.x, k), y = lerp(rod.y, end.y, k) - Math.sin(k * Math.PI) * (H * 0.25) * (0.5 + C.fly.Z * 0.5);
+    lineEnd = { x, y }; c.fillStyle = '#f5efe4'; c.beginPath(); c.arc(x, y, 5, 0, 7); c.fill();
+  }
+  // bobber
+  if (C.bob && C.phase !== 'drill') {
+    const p = P(C.bob.X, Math.min(C.bob.Z, 1.05)), r = Math.max(4, 11 * p.p), dip = C.bob.dip * r * 0.9;
+    if (C.phase === 'bite') { const k = (t * 2) % 1; c.strokeStyle = `rgba(255,255,255,${0.8 * (1 - k)})`; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, r * (1 + k * 3), r * 0.4 * (1 + k * 3), 0, 0, 7); c.stroke(); }
+    c.fillStyle = '#f5efe4'; c.beginPath(); c.arc(p.x, p.y - r * 0.6 + dip, r, Math.PI, 0); c.fill();
+    c.fillStyle = '#e2533f'; c.beginPath(); c.arc(p.x, p.y - r * 0.6 + dip - r * 0.15, r * 0.8, Math.PI, 0); c.fill();
+    lineEnd = { x: p.x, y: p.y - r * 0.6 + dip };
+  }
+  // hooked fish
+  if (C.phase === 'drill' || C.phase === 'landed') {
+    const p = P(C.fx, Math.max(0, C.D)), r = 26 * p.p * (0.6 + SPECIES[C.fish.sid].size * 0.5);
+    for (let i = 0; i < 3; i++) { const k = ((t * (1 + C.run) + i / 3) % 1); c.strokeStyle = `rgba(255,255,255,${0.5 * (1 - k)})`; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, r * (0.6 + k * 1.6), r * 0.3 * (0.6 + k * 1.6), 0, 0, 7); c.stroke(); }
+    if (C.run > 0.5) { c.fillStyle = 'rgba(255,255,255,0.7)'; for (let i = 0; i < 8; i++) { const a = t * 7 + i; c.beginPath(); c.arc(p.x + Math.cos(a) * r * 0.9, p.y - Math.abs(Math.sin(a * 1.7)) * r * 1.2, 2 + p.p * 2, 0, 7); c.fill(); } }
+    c.fillStyle = 'rgba(3,16,20,0.6)'; c.beginPath(); c.ellipse(p.x, p.y, r * 0.8, r * 0.25, Math.sin(t * 3) * 0.3, 0, 7); c.fill();
+    lineEnd = { x: p.x, y: p.y }; tension = C.T;
+  }
+  // rod and line
+  const bend = C.phase === 'drill' ? clamp(C.T, 0, 1.2) : 0.1;
+  const tip = { x: rod.x - 10 + bend * 40, y: rod.y - H * 0.42 + bend * H * 0.12 };
+  c.strokeStyle = '#2a1d12'; c.lineWidth = 7; c.lineCap = 'round'; c.beginPath(); c.moveTo(W * 0.86, H + 10); c.quadraticCurveTo(rod.x + 10, rod.y - H * 0.18, tip.x, tip.y); c.stroke();
+  c.strokeStyle = '#d8b48a'; c.lineWidth = 3; c.beginPath(); c.moveTo(W * 0.86, H + 10); c.quadraticCurveTo(rod.x + 10, rod.y - H * 0.18, tip.x, tip.y); c.stroke();
+  if (lineEnd) {
+    const sag = (1 - clamp(tension, 0, 1)) * 60 + 6;
+    c.strokeStyle = C.phase === 'drill' && C.T >= 0.85 ? 'rgba(240,122,106,0.95)' : 'rgba(245,239,228,0.75)'; c.lineWidth = 1.3;
+    c.beginPath(); c.moveTo(tip.x, tip.y); c.quadraticCurveTo((tip.x + lineEnd.x) / 2, Math.max(tip.y, lineEnd.y) + sag, lineEnd.x, lineEnd.y); c.stroke();
+  }
+  // aim line from the compass
+  if (C.phase === 'aim' && sensors.heading != null && sensors.h0 != null) {
+    c.strokeStyle = 'rgba(242,163,58,0.7)'; c.lineWidth = 2; c.setLineDash([8, 8]); c.beginPath();
+    for (let z = 0.08; z <= 1.0; z += 0.04) { const p = P(aimX(), z); z === 0.08 ? c.moveTo(p.x, p.y) : c.lineTo(p.x, p.y); } c.stroke(); c.setLineDash([]);
+  }
+  // swipe guide
+  if (C.phase === 'aim' && !swipe) {
+    const k = (t * 0.8) % 1, x = W * 0.5, y0 = H * 0.86, y1 = H * 0.62;
+    c.fillStyle = `rgba(245,239,228,${0.55 * Math.sin(k * Math.PI)})`; c.beginPath(); c.arc(x, lerp(y0, y1, k), 14, 0, 7); c.fill();
+    c.strokeStyle = 'rgba(245,239,228,0.25)'; c.lineWidth = 2; c.setLineDash([4, 8]); c.beginPath(); c.moveTo(x, y0); c.lineTo(x, y1); c.stroke(); c.setLineDash([]);
+  }
+  if (swipe && swipe.pts.length > 1) {
+    const a = swipe.pts[0], b = swipe.pts[swipe.pts.length - 1];
+    c.strokeStyle = 'rgba(242,163,58,0.8)'; c.lineWidth = 4; c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke();
+  }
+}
+
+// ---------- reveal (3D) ----------
+let three = null;
+const models = {};
+function initThree() {
+  const canvas = $('#threeCv');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.outputEncoding = THREE.sRGBEncoding; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
+  const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(35, 1, 0.05, 50);
+  scene.add(new THREE.HemisphereLight(0xcfeee8, 0x1a2a20, 0.85));
+  const key = new THREE.DirectionalLight(0xfff1d6, 1.5); key.position.set(3, 5, 4); scene.add(key);
+  const rim = new THREE.DirectionalLight(0x7fe0d8, 1.0); rim.position.set(-4, 2, -4); scene.add(rim);
+  const holder = new THREE.Group(); scene.add(holder);
+  const U = { uTime: { value: 0 } };
+  function resize() {
+    const w = canvas.clientWidth, h = canvas.clientHeight; if (!w || !h) return;
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1)); renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.fov = w / h < 1.1 ? 48 : 30; camera.updateProjectionMatrix();
+    const half = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * camera.aspect, dist = Math.max(3.6, 1.2 * 1.18 / half);
+    camera.position.set(0.4, 0.35, dist); camera.lookAt(0, -0.05, 0);
+  }
+  three = { renderer, scene, camera, holder, U, resize };
+  resize();
+}
+function toFloat(attr) {
+  const n = attr.count, k = attr.itemSize, out = new Float32Array(n * k), get = [attr.getX, attr.getY, attr.getZ, attr.getW];
+  let div = 1; const src = attr.isInterleavedBufferAttribute ? attr.data.array : attr.array;
+  if (attr.normalized) { if (src instanceof Int16Array) div = 32767; else if (src instanceof Uint16Array) div = 65535; else if (src instanceof Int8Array) div = 127; else if (src instanceof Uint8Array) div = 255; }
+  for (let i = 0; i < n; i++) for (let c = 0; c < k; c++) { const v = get[c].call(attr, i) / div; out[i * k + c] = attr.normalized ? Math.max(-1, v) : v; }
+  return new THREE.BufferAttribute(out, k);
+}
+function loadModel(sid) {
+  if (models[sid]) return models[sid];
+  models[sid] = fetch(SPECIES[sid].file).then(r => { if (!r.ok) throw new Error(r.status); return r.text(); }).then(b64 => new Promise((res, rej) => {
+    const bin = atob(b64.trim()), buf = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    new THREE.GLTFLoader().parse(buf.buffer, '', gltf => {
+      gltf.scene.updateMatrixWorld(true);
+      const meshes = []; gltf.scene.traverse(o => { if (o.isMesh) meshes.push(o); });
+      const box = new THREE.Box3(), baked = meshes.map(m => {
+        const g = new THREE.BufferGeometry();
+        for (const nm of ['position', 'normal', 'uv']) if (m.geometry.attributes[nm]) g.setAttribute(nm, toFloat(m.geometry.attributes[nm]));
+        if (m.geometry.index) g.setIndex(m.geometry.index);
+        g.applyMatrix4(m.matrixWorld); g.rotateY(Math.PI); g.computeBoundingBox(); box.union(g.boundingBox);
+        return { g, mat: m.material };
+      });
+      const size = new THREE.Vector3(), ctr = new THREE.Vector3(); box.getSize(size); box.getCenter(ctr); const s = 2.4 / size.x;
+      const group = new THREE.Group();
+      baked.forEach(({ g, mat }) => {
+        g.translate(-ctr.x, -ctr.y, -ctr.z); g.scale(s, s, s); if (!g.attributes.normal) g.computeVertexNormals();
+        if (mat.isMeshStandardMaterial) { mat.roughness = 0.45; mat.metalness = 0.03; }
+        mat.onBeforeCompile = sh => {
+          sh.uniforms.uTime = three.U.uTime;
+          sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+            float u = position.x / 2.4 + 0.5; float k = max(0.0, 1.05 - u);
+            transformed.z += 0.12 * k * k * sin(6.6 * u + 3.4 * uTime);`);
+        };
+        mat.needsUpdate = true;
+        const mesh = new THREE.Mesh(g, mat); mesh.frustumCulled = false; group.add(mesh);
+      });
+      res(group);
+    }, rej);
+  }));
+  models[sid].catch(() => { delete models[sid]; });
+  return models[sid];
+}
+
+let catchRec = null;
+function landFish() {
+  const f = C.fish, s = SPECIES[f.sid], prev = save.dex[f.sid];
+  const isNew = !prev, isPB = prev && f.L > prev.best.L;
+  catchRec = { f, isNew, isPB };
+  $('#rvEyebrow').textContent = 'Fiskedex ' + s.dex;
+  $('#rvName').textContent = s.name; $('#rvLatin').textContent = s.latin;
+  $('#rvLen').textContent = Math.round(f.L) + ' cm';
+  $('#rvW').textContent = f.W < 1 ? Math.round(f.W * 1000) + ' g' : f.W.toFixed(2).replace('.', ',') + ' kg';
+  $('#rvBest').textContent = prev ? Math.round(Math.max(prev.best.L, f.L)) + ' cm' : 'Ny!';
+  const badges = []; if (isNew) badges.push('Ny art i fiskedexen +500 XP'); if (isPB) badges.push('Personbästa'); if (f.L >= s.min + (s.max - s.min) * 0.75) badges.push('Storfisk');
+  $('#rvBadges').innerHTML = badges.map(b => `<span class="badge">${b}</span>`).join('');
+  showLayer('reveal'); if (!three) initThree(); three.resize();
+  three.holder.clear(); $('#loading').style.display = '';
+  $('#loading').textContent = 'Tar upp fisken …';
+  loadModel(f.sid).then(g => { if (catchRec && catchRec.f === f) { three.holder.clear(); three.holder.add(g); $('#loading').style.display = 'none'; } })
+    .catch(() => { $('#loading').textContent = 'Fisken kunde inte visas i 3D här, men den är fångad.'; });
+}
+function finishCatch(released) {
+  const { f, isNew } = catchRec; const prev = save.dex[f.sid];
+  save.dex[f.sid] = { count: (prev ? prev.count : 0) + 1, released: (prev ? prev.released || 0 : 0) + (released ? 1 : 0), best: prev && prev.best.L >= f.L ? prev.best : { L: f.L, W: f.W } };
+  store.set('fg-proto', save);
+  addXp(100 + (isNew ? 500 : 0) + (released ? 50 : 0));
+  catchRec = null; fillShadows(); showLayer(null);
+  toast(released ? 'Fisken simmar iväg med ditt märke.' : 'Fångsten är sparad i fiskedexen.');
+  hint('Fler skuggor dyker upp i sjön. Gå runt sjön eller ut på bryggan.');
+}
+$('#release').addEventListener('click', () => finishCatch(true));
+$('#keep').addEventListener('click', () => finishCatch(false));
+
+// ---------- dex ----------
+function renderDex() {
+  const rows = ORDER.map(k => {
+    const s = SPECIES[k], d = save.dex[k];
+    return `<div class="dexrow${d ? '' : ' locked'}"><div class="no">${s.dex}</div><div><div class="nm">${d ? s.name : '???'}</div><div class="sub">${d ? s.latin + ' · ' + d.count + ' fångad' + (d.count > 1 ? 'e' : '') : 'Lever i den här sjön'}</div></div>` +
+      `<div class="rec">${d ? '<b>' + Math.round(d.best.L) + ' cm</b>' + (d.best.W < 1 ? Math.round(d.best.W * 1000) + ' g' : d.best.W.toFixed(1).replace('.', ',') + ' kg') : ''}</div></div>`;
+  });
+  for (const [no, nm, where] of LOCKED) rows.push(`<div class="dexrow locked"><div class="no">${no}</div><div><div class="nm">${nm}</div><div class="sub">${where}</div></div><div class="rec"></div></div>`);
+  $('#dexList').innerHTML = rows.join('');
+}
+$('#sensBtn').addEventListener('click', () => { if (!sensors.on) enableSensors(); else { sensors.compass = !sensors.compass; syncSens(); } });
+$('#dexBtn').addEventListener('click', () => { renderDex(); showLayer('dex'); });
+$('#dexClose').addEventListener('click', () => showLayer(null));
+$('#dex').addEventListener('click', e => { if (e.target.id === 'dex') showLayer(null); });
+
+// ---------- layers ----------
+let layer = null;
+function showLayer(id) {
+  layer = id; for (const l of ['catch', 'reveal', 'dex']) $('#' + l).classList.toggle('on', l === id);
+  const onMap = id === null || id === 'dex';
+  $('#mapBottom').style.display = onMap ? '' : 'none';
+  document.querySelector('.hud').style.display = (id === 'catch' || id === 'reveal') ? 'none' : '';
+  if (id !== 'catch') { C.phase = 'off'; setBrake(false); }
+}
+$('#giveUp').addEventListener('click', () => { showLayer(null); });
+$('#toMap').addEventListener('click', () => { showLayer(null); fillShadows(); });
+$('#retry').addEventListener('click', () => { C.spooks = 0; toAim(); });
+
+// ---------- loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; const t = now / 1000;
+  updateSensors(dt);
+  if (layer === null || layer === 'dex') { updateMap(dt); drawMap(t); }
+  if (layer === 'catch') { updateCatch(dt); drawCatch(t); }
+  if (layer === 'reveal' && three) { three.U.uTime.value = t; three.holder.rotation.y = -0.25 + Math.sin(t * 0.45) * 0.45; three.holder.position.y = Math.sin(t * 1.3) * 0.04; three.renderer.render(three.scene, three.camera); }
+  requestAnimationFrame(frame);
+}
+resize(); syncHud(); showLayer(null);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
