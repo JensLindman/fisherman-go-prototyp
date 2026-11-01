@@ -44,6 +44,8 @@ button:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
 .xpbar i { display: block; height: 100%; width: 0; background: var(--amber); transition: width .4s; }
 .bottom { position: fixed; left: 0; right: 0; bottom: 0; padding: 0 16px max(22px, calc(env(safe-area-inset-bottom) + 16px)); display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none; z-index: 5; }
 .bottom > * { pointer-events: auto; }
+#homeBtn { align-self: flex-end; display: none; align-items: center; gap: 8px; }
+#homeBtn.on { display: flex; }
 .hint { background: var(--panel); border: 1px solid var(--line); max-width: 420px; text-align: center; font-size: 15px; line-height: 1.4; padding: 10px 16px; border-radius: 14px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .toast { position: fixed; left: 50%; top: 72px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 16px; font-weight: 700; font-size: 15px; max-width: min(420px, calc(100% - 32px)); text-align: center; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 30; }
@@ -127,6 +129,7 @@ button:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
   <button class="pill" id="dexBtn" type="button">Fiskedex <span id="dexCount">0/3</span></button>
 </div>
 <div class="bottom" id="mapBottom">
+  <button type="button" class="pill" id="homeBtn"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="9" r="2" fill="#f2a33a"/><path d="M9 0v3M9 15v3M0 9h3M15 9h3" stroke="currentColor" stroke-width="2"/></svg>Till min plats</button>
   <div class="hint" id="hint">Laddar kartan …</div>
   <div class="row"><button type="button" class="primary" id="startBtn">Starta GPS och kompass</button><button type="button" id="modeBtn">Demosjön</button></div>
 </div>
@@ -295,7 +298,7 @@ window.addEventListener('resize', resize);
 const TAU = Math.PI * 2;
 const params = new URLSearchParams(location.search);
 const START = { lat: parseFloat(params.get('lat')) || 59.3247, lon: parseFloat(params.get('lon')) || 18.0628 };   // before GPS: Riddarholmen, Stockholm
-const world = { mode: 'real', map: null, lat0: START.lat, lon0: START.lon, polys: [], lines: [], names: [], ready: false, readyAt: 0, refreshT: 0, spawnT: 0, hintT: 0, emptyFor: 0 };
+const world = { mode: 'real', map: null, lat0: START.lat, lon0: START.lon, polys: [], lines: [], names: [], ready: false, readyAt: 0, free: false, backUntil: 0, refreshT: 0, spawnT: 0, hintT: 0, emptyFor: 0 };
 const M_LAT = 111320, mLon = () => M_LAT * Math.cos(world.lat0 * Math.PI / 180);
 const toLL = (x, y) => [world.lon0 + x / mLon(), world.lat0 - y / M_LAT];          // metres (x east, y south) → [lon, lat]
 const toXY = (lon, lat) => ({ x: (lon - world.lon0) * mLon(), y: (world.lat0 - lat) * M_LAT });
@@ -360,8 +363,13 @@ const blocked = (x, y) => !!waterAt(x, y);
 const flat = coords => { const a = new Float64Array(coords.length * 2); coords.forEach((c, i) => { const q = toXY(c[0], c[1]); a[2 * i] = q.x; a[2 * i + 1] = q.y; }); return a; };
 const bbox = (o, a, pad) => { let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); } return Object.assign(o, { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad }); };
 const LINE_W = { river: 14, canal: 10, stream: 4 };
+function setFree(on) {   // free look: the camera stops following you until you press "Till min plats"
+  world.free = on; $('#homeBtn').classList.toggle('on', on); world.hintT = 0;
+  if (!on && world.map) { const [lon, lat] = toLL(player.x, player.y); world.backUntil = perfNow() + 0.75; world.map.easeTo({ center: [lon, lat], bearing: -sensors.rot * 180 / Math.PI, duration: 700 }); }
+}
+$('#homeBtn').addEventListener('click', () => setFree(false));
 function refreshWater() {
-  const m = world.map; if (world.mode !== 'real' || !m || !m.isStyleLoaded()) return;
+  const m = world.map; if (world.mode !== 'real' || !m || !m.isStyleLoaded() || world.free || perfNow() < world.backUntil) return;   // keep the water around you while you look elsewhere
   let water, ways, names;
   try { water = m.querySourceFeatures('omt', { sourceLayer: 'water' }); ways = m.querySourceFeatures('omt', { sourceLayer: 'waterway' }); names = m.querySourceFeatures('omt', { sourceLayer: 'water_name' }); } catch (e) { return; }
   const polys = [], lines = [], nm = [];
@@ -422,10 +430,11 @@ function initMap() {
   if (!window.maplibregl) return false;
   try {
     const m = new maplibregl.Map({ container: 'gl', style: STYLE, center: toLL(player.x, player.y), zoom: 16.6, pitch: 45, minZoom: 14.5, maxZoom: 19.5, attributionControl: false,
-      dragPan: false, dragRotate: false, keyboard: false, touchPitch: false, pitchWithRotate: false, boxZoom: false, fadeDuration: 0 });
+      dragPan: true, dragRotate: false, keyboard: false, touchPitch: false, pitchWithRotate: false, boxZoom: false, fadeDuration: 0 });
     m.scrollZoom.enable({ around: 'center' }); m.touchZoomRotate.enable({ around: 'center' }); m.touchZoomRotate.disableRotation();
     m.setPadding({ top: Math.round(H * 0.25), bottom: 0, left: 0, right: 0 });    // you stand a bit below the middle, like the demo
     m.on('load', refreshWater);
+    m.on('dragstart', () => setFree(true));   // dragging the map lets you look around
     world.map = m;
     setTimeout(checkMap, 10000);
     return true;
@@ -440,11 +449,12 @@ function checkMap(retry) {
   { setMode('demo'); toast('Kartan kunde inte laddas här, så du fiskar i demosjön. Öppna prototypen på sin egen sida för riktig karta.'); }
 }
 function syncCamera() {
-  const m = world.map; if (!m) return;
+  const m = world.map; if (!m || world.free || perfNow() < world.backUntil) return;
   const [lon, lat] = toLL(player.x, player.y), b = -sensors.rot * 180 / Math.PI, c = m.getCenter();
   if (Math.abs(c.lng - lon) > 1e-7 || Math.abs(c.lat - lat) > 1e-7 || Math.abs(angDiff(m.getBearing(), b)) > 0.05) m.jumpTo({ center: [lon, lat], bearing: b });
 }
 function relocate(lat, lon) {
+  if (world.free) { world.free = false; $('#homeBtn').classList.remove('on'); }
   world.lat0 = lat; world.lon0 = lon; player.x = 0; player.y = 0; player.tx = null; player.gps = false;
   shadows = []; world.polys = []; world.lines = []; world.names = []; world.ready = false; world.readyAt = perfNow() + 1.2;
   if (world.map) world.map.jumpTo({ center: [lon, lat] });
@@ -457,6 +467,7 @@ function rebase() {   // keep the numbers small as you walk far from where you s
 }
 function setMode(mode) {
   if (mode === 'real' && !initMap()) { mode = 'demo'; toast('Kartan kunde inte startas här, så du fiskar i demosjön.'); }
+  world.free = false; $('#homeBtn').classList.remove('on');
   world.mode = mode; shadows = []; player.tx = null; player.gps = false; world.emptyFor = 0; world.hintT = 0;
   $('#gl').style.display = $('#attrib').style.display = mode === 'real' ? '' : 'none';
   $('#modeBtn').textContent = mode === 'real' ? 'Demosjön' : 'Riktig karta';
@@ -595,7 +606,7 @@ function drawMap(t) {
   c.save(); c.translate(o.X, o.Y); c.rotate(ha);
   c.fillStyle = 'rgba(242,163,58,0.35)'; c.beginPath(); c.moveTo(10, 0); c.lineTo(32, -10); c.lineTo(32, 10); c.closePath(); c.fill(); c.restore();
   c.fillStyle = '#f2a33a'; c.strokeStyle = '#f5efe4'; c.lineWidth = 3; c.beginPath(); c.arc(o.X, o.Y, 11, 0, 7); c.fill(); c.stroke();
-  $('#north').style.transform = `rotate(${sensors.rot}rad)`;
+  $('#north').style.transform = `rotate(${world.mode === 'real' && world.map ? -world.map.getBearing() * Math.PI / 180 : sensors.rot}rad)`;
 }
 
 // ---------- map input ----------
@@ -610,12 +621,14 @@ wrap.addEventListener('pointerup', e => {
     if (d <= CAST) { startCatch(best, d); return; }
     toast(`Skuggan är ${Math.round(d)} m bort. Du når ${CAST} m – gå närmare.`);
   }
+  if (world.free) { if (!best) toast('Du tittar runt. Tryck på Till min plats för att gå igen.'); return; }
   if (sensors.gps && world.mode === 'real') { if (!best) toast('GPS är på: gå i verkligheten för att flytta dig.'); return; }
   const w = unproj(e.clientX, e.clientY); player.tx = w.x; player.ty = w.y; player.gps = false;
 });
 let hintTxt = '';
 function hint(t) { if (t !== hintTxt) { hintTxt = t; $('#hint').textContent = t; } }
 function mapHint() {
+  if (world.free) return hint('Du tittar runt på kartan. Fiskarna simmar bara nära dig.');
   if (world.mode === 'real' && !world.ready) return hint('Laddar kartan …');
   if (world.mode === 'real' && world.emptyFor > 3) return hint('Inget fiskevatten inom 150 m. Gå mot en sjö, å, älv eller kusten, eller prova demosjön.');
   const here = world.mode === 'real' ? placeName(player.x, player.y) : null;
