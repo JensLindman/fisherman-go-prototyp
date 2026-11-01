@@ -298,7 +298,7 @@ window.addEventListener('resize', resize);
 const TAU = Math.PI * 2;
 const params = new URLSearchParams(location.search);
 const START = { lat: parseFloat(params.get('lat')) || 59.3247, lon: parseFloat(params.get('lon')) || 18.0628 };   // before GPS: Riddarholmen, Stockholm
-const world = { mode: 'real', map: null, lat0: START.lat, lon0: START.lon, polys: [], lines: [], names: [], ready: false, readyAt: 0, free: false, backUntil: 0, refreshT: 0, spawnT: 0, hintT: 0, emptyFor: 0 };
+const world = { mode: 'real', map: null, lat0: START.lat, lon0: START.lon, polys: [], lines: [], names: [], ready: false, readyAt: 0, free: false, backUntil: 0, cells: new Map(), gone: new Set(), slot: 0, view: null, refreshT: 0, spawnT: 0, hintT: 0, emptyFor: 0 };
 const M_LAT = 111320, mLon = () => M_LAT * Math.cos(world.lat0 * Math.PI / 180);
 const toLL = (x, y) => [world.lon0 + x / mLon(), world.lat0 - y / M_LAT];          // metres (x east, y south) → [lon, lat]
 const toXY = (lon, lat) => ({ x: (lon - world.lon0) * mLon(), y: (world.lat0 - lat) * M_LAT });
@@ -315,7 +315,7 @@ const HAB = {
   ocean:  { torsk: 34, abborre: 14, lax: 14, fenknot: 14, marulk: 13, gadda: 8, haj: 3 }
 };
 HAB.dock = HAB.lake;
-const rollSpecies = cls => { const w = HAB[cls] || HAB.lake; let r = Math.random() * Object.values(w).reduce((a, b) => a + b, 0); for (const k in w) { r -= w[k]; if (r <= 0) return k; } return 'abborre'; };
+const rollSpecies = (cls, rand = Math.random) => { const w = HAB[cls] || HAB.lake; let r = rand() * Object.values(w).reduce((a, b) => a + b, 0); for (const k in w) { r -= w[k]; if (r <= 0) return k; } return 'abborre'; };
 
 // the demo lake, used when the real map is not available
 function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -369,7 +369,7 @@ function setFree(on) {   // free look: the camera stops following you until you 
 }
 $('#homeBtn').addEventListener('click', () => setFree(false));
 function refreshWater() {
-  const m = world.map; if (world.mode !== 'real' || !m || !m.isStyleLoaded() || world.free || perfNow() < world.backUntil) return;   // keep the water around you while you look elsewhere
+  const m = world.map; if (world.mode !== 'real' || !m || !m.isStyleLoaded()) return;
   let water, ways, names;
   try { water = m.querySourceFeatures('omt', { sourceLayer: 'water' }); ways = m.querySourceFeatures('omt', { sourceLayer: 'waterway' }); names = m.querySourceFeatures('omt', { sourceLayer: 'water_name' }); } catch (e) { return; }
   const polys = [], lines = [], nm = [];
@@ -390,6 +390,8 @@ function refreshWater() {
   }
   world.polys = polys; world.lines = lines; world.names = nm;
   if (!world.ready && perfNow() > world.readyAt && m.areTilesLoaded()) world.ready = true;
+  const c = m.getCenter(); world.view = toXY(c.lng, c.lat);
+  if (world.ready && m.areTilesLoaded()) cellSpawns();
 }
 function placeName(x, y) {
   if (world.mode === 'demo') return 'Demosjön';
@@ -456,19 +458,19 @@ function syncCamera() {
 function relocate(lat, lon) {
   if (world.free) { world.free = false; $('#homeBtn').classList.remove('on'); }
   world.lat0 = lat; world.lon0 = lon; player.x = 0; player.y = 0; player.tx = null; player.gps = false;
-  shadows = []; world.polys = []; world.lines = []; world.names = []; world.ready = false; world.readyAt = perfNow() + 1.2;
+  shadows = []; world.cells.clear(); world.polys = []; world.lines = []; world.names = []; world.ready = false; world.readyAt = perfNow() + 1.2;
   if (world.map) world.map.jumpTo({ center: [lon, lat] });
 }
 function rebase() {   // keep the numbers small as you walk far from where you started
   const [lon, lat] = toLL(player.x, player.y), dx = player.x, dy = player.y;
   world.lat0 = lat; world.lon0 = lon; player.x = 0; player.y = 0; if (player.tx != null) { player.tx -= dx; player.ty -= dy; }
-  for (const s of shadows) { s.x -= dx; s.y -= dy; }
+  for (const s of shadows) { s.x -= dx; s.y -= dy; if (s.hx != null) { s.hx -= dx; s.hy -= dy; } }
   refreshWater();
 }
 function setMode(mode) {
   if (mode === 'real' && !initMap()) { mode = 'demo'; toast('Kartan kunde inte startas här, så du fiskar i demosjön.'); }
   world.free = false; $('#homeBtn').classList.remove('on');
-  world.mode = mode; shadows = []; player.tx = null; player.gps = false; world.emptyFor = 0; world.hintT = 0;
+  world.mode = mode; shadows = []; world.cells.clear(); player.tx = null; player.gps = false; world.emptyFor = 0; world.hintT = 0;
   $('#gl').style.display = $('#attrib').style.display = mode === 'real' ? '' : 'none';
   $('#modeBtn').textContent = mode === 'real' ? 'Demosjön' : 'Riktig karta';
   if (mode === 'demo') {
@@ -493,11 +495,57 @@ function spawnShadow(near) {
   }
   return null;
 }
-function tickSpawns() {
+function tickSpawns() {   // the demo lake: a handful of fish around you
+  if (world.mode !== 'demo') return;
   const t = perfNow();
   shadows = shadows.filter(s => s === C.shadow || (t - s.born < s.life && Math.hypot(s.x - player.x, s.y - player.y) < 320));
-  if (world.mode === 'real' && !world.ready) return;
   if (shadows.length < 6) { const s = spawnShadow(!shadows.some(inReach)); if (s) shadows.push(s); }
+}
+
+// the real map: fish in every water. The world is cut into 40 m cells, and whether a cell has a fish (where, which species)
+// follows from the cell and the quarter-hour, so everyone sees the same fish and a fish you spot far away is there when you arrive.
+const CELL = 40, SLOT_MS = 15 * 60 * 1000, dLat = CELL / M_LAT;
+const dLonAt = j => CELL / (M_LAT * Math.cos((j + 0.5) * dLat * Math.PI / 180));
+const hash3 = (a, b, c) => { let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263) ^ Math.imul(c | 0, 1440662683); h = Math.imul(h ^ (h >>> 13), 1274126177); return (h ^ (h >>> 16)) | 0; };
+function snapToLine(x, y, maxD) {   // brooks are thin lines on the map: put the fish on the nearest one
+  let best = null, bd = maxD;
+  for (const l of world.lines) {
+    if (x < l.x0 - maxD || x > l.x1 + maxD || y < l.y0 - maxD || y > l.y1 + maxD) continue;
+    const q = l.pts;
+    for (let i = 2; i < q.length; i += 2) {
+      const ax = q[i - 2], ay = q[i - 1], dx = q[i] - ax, dy = q[i + 1] - ay, L = dx * dx + dy * dy, k = L ? clamp(((x - ax) * dx + (y - ay) * dy) / L, 0, 1) : 0;
+      const px = ax + k * dx, py = ay + k * dy, d = Math.hypot(x - px, y - py);
+      if (d < bd) { bd = d; best = { x: px, y: py, cls: l.cls }; }
+    }
+  }
+  return best;
+}
+function cellFish(i, j, slot) {
+  const r = rng(hash3(i, j, slot));
+  if (r() > 0.55) return null;
+  const lat = (j + r()) * dLat, lon = (i + r()) * dLonAt(j);
+  let { x, y } = toXY(lon, lat), cls = waterAt(x, y);
+  if (!cls) { const s = snapToLine(x, y, CELL * 0.6); if (!s || r() > 0.4) return null; x = s.x; y = s.y; cls = s.cls; }   // several cells reach the same brook, so fewer each
+  else if (cls !== 'stream' && !clear(x, y)) return null;
+  if (!nearShore(x, y)) return null;       // fish keep within casting distance of some shore
+  return { key: i + ',' + j, x, y, hx: x, hy: y, cls, h: r() * TAU, sp: cls === 'stream' ? 0 : 0.4 + r() * 0.9, sid: rollSpecies(cls, r), ph: r() * 10, chk: 0, place: placeName(x, y) };
+}
+function cellSpawns() {   // fill the cells on screen whose water is loaded, nearest you first
+  const m = world.map, slot = Math.floor(Date.now() / SLOT_MS);
+  if (slot !== world.slot) { world.slot = slot; world.cells.clear(); world.gone.clear(); shadows = shadows.filter(s => s === C.shadow); }
+  const b = m.getBounds(), cv = world.view, lim = 1200, todo = [];
+  for (let j = Math.floor(b.getSouth() / dLat); j <= Math.floor(b.getNorth() / dLat); j++) {
+    const dl = dLonAt(j);
+    for (let i = Math.floor(b.getWest() / dl); i <= Math.floor(b.getEast() / dl); i++) {
+      const key = i + ',' + j; if (world.cells.has(key)) continue;
+      const lon = (i + 0.5) * dl, lat = (j + 0.5) * dLat, q = toXY(lon, lat);
+      if (Math.abs(q.x - cv.x) > lim || Math.abs(q.y - cv.y) > lim) continue;
+      const s = m.project([lon, lat]); if (s.x < 0 || s.y < 0 || s.x > W || s.y > H) continue;   // only what you can see, so its water is loaded
+      todo.push({ i, j, key, d: Math.hypot(q.x - player.x, q.y - player.y) });
+    }
+  }
+  todo.sort((a, c) => a.d - c.d);
+  for (const c of todo.slice(0, 700)) { const f = cellFish(c.i, c.j, slot); world.cells.set(c.key, f); if (f && !world.gone.has(c.key)) shadows.push(f); }
 }
 
 // ---------- map loop ----------
@@ -515,17 +563,22 @@ function updateMap(dt) {
   }
   if (world.mode === 'real') {
     if (Math.hypot(player.x, player.y) > 1500) rebase();
-    world.refreshT -= dt; if (world.refreshT <= 0) { world.refreshT = 1.5; refreshWater(); }
+    world.refreshT -= dt; if (world.refreshT <= 0) { world.refreshT = 1; refreshWater(); }
     syncCamera();
   }
   for (const s of shadows) {
+    if (world.mode === 'real' && Math.hypot(s.x - player.x, s.y - player.y) > 300 && (!world.view || Math.hypot(s.x - world.view.x, s.y - world.view.y) > 1300)) continue;
     s.h += (Math.random() - 0.5) * dt * 1.2;
+    if (s.hx != null && Math.hypot(s.x - s.hx, s.y - s.hy) > 22) s.h = Math.atan2(s.hy - s.y, s.hx - s.x) + (Math.random() - 0.5) * 0.6;   // stay near home
     const nx = s.x + Math.cos(s.h) * s.sp * dt, ny = s.y + Math.sin(s.h) * s.sp * dt;
+    if ((s.chk = (s.chk || 0) - dt) > 0) { s.x = nx; s.y = ny; continue; }   // look ahead a few times a second, not every frame
+    s.chk = 0.3;
+    if (!waterAt(s.x, s.y)) continue;                                       // its water isn't loaded right now: rest
     if (waterAt(nx + Math.cos(s.h) * 7, ny + Math.sin(s.h) * 7) && waterAt(nx, ny)) { s.x = nx; s.y = ny; }
     else s.h += Math.PI * (0.6 + Math.random() * 0.5);
   }
   world.spawnT -= dt; if (world.spawnT <= 0) { world.spawnT = 0.4; tickSpawns(); }
-  world.emptyFor = shadows.length ? 0 : world.emptyFor + dt;
+  world.emptyFor = shadows.some(s => Math.hypot(s.x - player.x, s.y - player.y) < 200) ? 0 : world.emptyFor + dt;
   world.hintT -= dt; if (world.hintT <= 0) { world.hintT = 0.5; mapHint(); }
 }
 
@@ -628,9 +681,9 @@ wrap.addEventListener('pointerup', e => {
 let hintTxt = '';
 function hint(t) { if (t !== hintTxt) { hintTxt = t; $('#hint').textContent = t; } }
 function mapHint() {
-  if (world.free) return hint('Du tittar runt på kartan. Fiskarna simmar bara nära dig.');
+  if (world.free) return hint('Du tittar runt på kartan. Fiskarna du ser finns där, gå dit för att fiska.');
   if (world.mode === 'real' && !world.ready) return hint('Laddar kartan …');
-  if (world.mode === 'real' && world.emptyFor > 3) return hint('Inget fiskevatten inom 150 m. Gå mot en sjö, å, älv eller kusten, eller prova demosjön.');
+  if (world.mode === 'real' && world.emptyFor > 3) return hint('Inget fiskevatten inom 200 m. Gå mot en sjö, å, älv eller kusten, eller prova demosjön.');
   const here = world.mode === 'real' ? placeName(player.x, player.y) : null;
   const move = sensors.gps ? 'Gå i verkligheten för att komma närmare.' : 'Tryck på kartan för att gå.';
   hint((here ? `Du är vid ${here}. ` : '') + (shadows.some(inReach) ? 'Tryck på en skugga inom den orange ringen för att kasta.' : move + ' Skuggorna i vattnet är fiskar.'));
@@ -700,7 +753,7 @@ function hook() {
   C.D = C.bob.Z; C.T = 0.35; C.S = 1; C.run = 1; C.runT = 1.5; C.over = 0; C.slack = 0; C.reel = 0; C.reelAcc = 0; C.fx = C.bob.X;
   setDrill(true); setStatus('Fisken sitter!', 'Veva runt rullen. Håll spänningen i det gröna.', true);
 }
-function removeShadow(sh) { shadows = shadows.filter(s => s !== sh); }
+function removeShadow(sh) { shadows = shadows.filter(s => s !== sh); if (sh && sh.key) world.gone.add(sh.key); }   // a caught or scared fish stays gone this quarter-hour
 
 // reel + brake
 const reel = $('#reel'), arm = $('#arm'); let reelP = null;
@@ -979,7 +1032,7 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 resize(); syncHud(); showLayer(null); setMode(params.has('demo') ? 'demo' : 'real');
-window.__fg = { world, player, shadows: () => shadows, waterAt, proj, startCatch, C, rollFish, landFish };   // for testing
+window.__fg = { world, player, shadows: () => shadows, waterAt, proj, startCatch, C, rollFish, landFish, cellFish, toLL, clear, nearShore };   // for testing
 requestAnimationFrame(frame);
 })();
 </script>
